@@ -82,13 +82,11 @@ class IP:
 
         # Nossa tabela será ordenada pela quantidade de bits considerados, sempre veremos assim o cidr
         # mais próximo do endereço recebido (em termos numéricos, não de distância)
-        print(f'before sorting {tabela}, len = {len(tabela)}')
         tabela.sort(key = lambda bits:int(bits[0].split('/')[1]), reverse = True)
        
-        print(f'after sorting {tabela}')
         for endereco in tabela:
             self.table[endereco[0]] = endereco[1]
-        print(self.table)
+        
 
     def registrar_recebedor(self, callback):
         """
