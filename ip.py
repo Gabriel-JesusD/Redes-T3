@@ -32,6 +32,18 @@ class IP:
             # atua como roteador
             next_hop = self._next_hop(dst_addr)
             # TODO: Trate corretamente o campo TTL do datagrama
+            # Aqui pegamos todos os valores do datagrama, por precaução, porém quemos checksum em 0 para recalcular
+            # e indice como nosso id lindo
+            veihl, dscpecn, length, _ , flafrag, _, protocol, _ , my, hop = struct.unpack('!BBHHHBBHII', datagrama[:20]) 
+            var = [veihl, dscpecn, length, self.id, flafrag, ttl, protocol, 0, my, hop]
+            
+            # Função que calcula o datagrama
+            datagrama = self.napolitano(payload, None, var)
+            
+            # Essa função retorna 'nop' caso não seja possível retransmitir
+            if(datagrama == 'nop'):
+                return
+
             self.enlace.enviar(datagrama, next_hop)
 
     def _next_hop(self, dest_addr):
@@ -86,7 +98,6 @@ class IP:
        
         for endereco in tabela:
             self.table[endereco[0]] = endereco[1]
-        
 
     def registrar_recebedor(self, callback):
         """
@@ -103,44 +114,59 @@ class IP:
         # TODO: Assumindo que a camada superior é o protocolo TCP, monte o
         # datagrama com o cabeçalho IP, contendo como payload o segmento.
         
-        # version e ihl     
-        veihl = 0x45
-        
-        # kk desculpa (dscp) e ecn      
-        dscpecn = 0x00
+        # Função para montar o datagrama
+        datagrama = self.napolitano(segmento, dest_addr, [])
 
-        #
-        length = 20 + len(segmento)
-        
-        # Flags e fragment_offset
-        flafrag = 0x00 
-        
-        # Time to live, quantos roteadores pode passar antes de desistir
-        ttl = 64
-        
-        # Número do protocolo como tamo simulando tcp é 6
-        protocol = 6
-        header_checksum = 0
-        
-        my = str2addr(self.meu_endereco)
-        my, = struct.unpack('!I', my)
-        hop = str2addr(dest_addr)
-        hop, = struct.unpack('!I', hop)
+        self.enlace.enviar(datagrama, next_hop)
+
+       
+    # Função para montar header e datagrama
+    def napolitano(self, segmento, dest_addr, var):
+        if 0 == len(var):
+            # version e ihl     
+            veihl = 0x45
+            
+            # kk desculpa (dscp) e ecn      
+            dscpecn = 0x00
+
+            #
+            length = 20 + len(segmento)
+            
+            # Flags e fragment_offset
+            flafrag = 0x00 
+            
+            # Time to live, quantos roteadores pode passar antes de desistir
+            ttl = 64
+            # Número do protocolo como tamo simulando tcp é 6
+            protocol = 6
+            header_checksum = 0
+            address = self.id
+            
+            my = str2addr(self.meu_endereco)
+            my, = struct.unpack('!I', my)
+            hop = str2addr(dest_addr)
+            hop, = struct.unpack('!I', hop)
+            
+            # aumenta o indice
+            self.id += length
+        else:
+            veihl, dscpecn, length, address, flafrag, ttl, protocol, header_checksum, my, hop = var
+            if 0 == ttl - 1:
+                return 'nop'
+            ttl -= 1
 
         # Primeiro calcula com checksum = 0
-        ip_header = struct.pack('!BBHHHBBHII', veihl, dscpecn, length, self.id, flafrag, ttl, protocol, header_checksum, my, hop)
+        ip_header = struct.pack('!BBHHHBBHII', veihl, dscpecn, length, address, flafrag, ttl, protocol, header_checksum, my, hop)
         
         # Ve o valor de checksum
         header_checksum = calc_checksum(ip_header)
 
         
         # Monta o cabeçalho com o valor alteradp
-        ip_header = struct.pack('!BBHHHBBHII', veihl, dscpecn, length, self.id, flafrag, ttl, protocol, header_checksum, my, hop) 
+        ip_header = struct.pack('!BBHHHBBHII', veihl, dscpecn, length, address, flafrag, ttl, protocol, header_checksum, my, hop) 
         
         # Coloca o segmento depois do cabeçalho, pra mandar pra camada de enlace
         datagrama = ip_header + segmento
 
-        self.enlace.enviar(datagrama, next_hop)
-
-        # aumenta o indice
-        self.id += length
+        
+        return datagrama
