@@ -19,6 +19,7 @@ class IP:
         self.ignore_checksum = self.enlace.ignore_checksum
         self.meu_endereco = None
         self.table = {}
+        self.proximity = -1
         self.id = 0
 
     def __raw_recv(self, datagrama):
@@ -30,18 +31,68 @@ class IP:
                 self.callback(src_addr, dst_addr, payload)
         else:
             # atua como roteador
+            self.proximity = -1
             next_hop = self._next_hop(dst_addr)
             # TODO: Trate corretamente o campo TTL do datagrama
             # Aqui pegamos todos os valores do datagrama, por precaução, porém quemos checksum em 0 para recalcular
             # e indice como nosso id lindo
-            veihl, dscpecn, length, _ , flafrag, _, protocol, _ , my, hop = struct.unpack('!BBHHHBBHII', datagrama[:20]) 
+            veihl, dscpecn, length, _ , flafrag, _, protocol, head_checksum , my, hop = struct.unpack('!BBHHHBBHII', datagrama[:20]) 
             var = [veihl, dscpecn, length, self.id, flafrag, ttl, protocol, 0, my, hop]
             
             # Função que calcula o datagrama
-            datagrama = self.napolitano(payload, None, var)
+            if ttl > 1:
+                datagrama = self.napolitano(payload, None, var)
             
             # Essa função retorna 'nop' caso não seja possível retransmitir
-            if(datagrama == 'nop'):
+            else:   
+                protocol = 1
+                self.proximity = -1
+                next_hop = self._next_hop(src_addr)
+                dest = next_hop
+                # Pulo do gato, é que a pessoa para onde iremos enviar é o própio src, caso a tabela nos retorne um ip com 0 valores iguais
+                if 0 == self.proximity:
+                    dest = src_addr
+                # my define o destinatario 
+                my, = struct.unpack('!I', str2addr(self.meu_endereco))
+                # hop define o receptor
+                hop, = struct.unpack('!I', str2addr(dest))
+
+                # 64 pois, vamos resetar o ttl para iniciar a volta do sinal
+                var = [veihl,dscpecn,length,self.id,flafrag,64,protocol,0,my,hop]
+                # ip_header = struct.pack('!BBHHHBBHII', veihl, dscpecn, length, self.id, flafrag, ttl, protocol, head_checksum, my, hop)
+
+                # Header icmp time exceed
+
+                # Tipo do cabeçalho
+                typ = 0x0b
+
+                # Campo code do icmp
+                code = 0
+
+                # Inicialmente checksum 0
+                checksum = 0
+
+                # Foi pedido unused como 0
+                unused = 0
+
+                # Calculamos o bit até onde vai o corpo do icmp pelo tamanho do cabeçalho de ip + 8 bytes
+                ihl = veihl & 0xf
+                tam = 4*(ihl)+8
+                
+                # Calculando checksum para o icmp
+                icmp_header = struct.pack('!BBHI', typ, code, checksum, unused) + (datagrama[:tam])
+                
+                checksum = calc_checksum(icmp_header)
+
+                icmp_header = struct.pack('!BBHI', typ, code, checksum, unused) + (datagrama[:tam])
+                
+                # IMPORTANTE, o tamanho do datagrama muda, devido ao tamanho do payload ser o tamanho do cabeçalho icmp
+                var[2] = 20 + len(icmp_header)
+
+                # struct.pack do datagrama, montar datagrama
+                datagrama = self.napolitano(icmp_header,None,var)
+
+                self.enlace.enviar(datagrama, next_hop)
                 return
 
             self.enlace.enviar(datagrama, next_hop)
@@ -56,8 +107,8 @@ class IP:
         for x in self.table.keys():
             # Converter o valor do cidr, desconsiderando os bits, usando a função do professor
             cidr,bits_desconsiderar = x.split('/')
-            
-            bits_desconsiderar = 32 - int(bits_desconsiderar)
+            aux = int(bits_desconsiderar)
+            bits_desconsiderar = 32 - aux
             cidr, = struct.unpack('!I', str2addr(cidr))
             # 32 é o máximo de bits que temos, poiss 4 campos com 8
             # >> shifta para a direita para tirar os bits que é pra desconsiderar, e << volta, para manter o tamanho
@@ -66,6 +117,7 @@ class IP:
             teste_dest = int_dest >> bits_desconsiderar << bits_desconsiderar
 
             if(teste_dest == cidr):
+                self.proximity = aux
                 return self.table[x]
 
     def definir_endereco_host(self, meu_endereco):
@@ -110,6 +162,7 @@ class IP:
         Envia segmento para dest_addr, onde dest_addr é um endereço IPv4
         (string no formato x.y.z.w).
         """
+        self.proximity = -1
         next_hop = self._next_hop(dest_addr)
         # TODO: Assumindo que a camada superior é o protocolo TCP, monte o
         # datagrama com o cabeçalho IP, contendo como payload o segmento.
@@ -151,10 +204,7 @@ class IP:
             self.id += length
         else:
             veihl, dscpecn, length, address, flafrag, ttl, protocol, header_checksum, my, hop = var
-            if 0 == ttl - 1:
-                return 'nop'
             ttl -= 1
-
         # Primeiro calcula com checksum = 0
         ip_header = struct.pack('!BBHHHBBHII', veihl, dscpecn, length, address, flafrag, ttl, protocol, header_checksum, my, hop)
         
@@ -164,7 +214,6 @@ class IP:
         
         # Monta o cabeçalho com o valor alteradp
         ip_header = struct.pack('!BBHHHBBHII', veihl, dscpecn, length, address, flafrag, ttl, protocol, header_checksum, my, hop) 
-        
         # Coloca o segmento depois do cabeçalho, pra mandar pra camada de enlace
         datagrama = ip_header + segmento
 
